@@ -1,0 +1,1105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" id="vp" content="width=600, height=600, user-scalable=no" />
+<meta name="mrbd-web-app-capable" content="yes" />
+<script>
+/* The fixed 600x600 viewport above is for the glasses (and the simulator
+   window), whose screen is exactly 600px wide. On an ordinary phone or
+   desktop browser (screen width not 600), relax it to device width so the
+   page reflows instead of scrolling sideways; the app stage then scales
+   itself to fit. On the glasses nothing changes. */
+(function(){ try{
+  if(window.screen && screen.width !== 600){
+    document.getElementById("vp").setAttribute("content", "width=device-width, initial-scale=1");
+  }
+}catch(e){} })();
+</script>
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:," />
+<title>Display Reader Demo</title>
+<style>
+  :root{
+    --bg:#000000;
+    --panel:#0b0b0b;
+    --panel2:#111111;
+    --line:#2a2a2a;
+    --text:#ffffff;
+    --dim:#b8b8b8;
+    --faint:#7d7d7d;
+    --accent:#ffd60a;
+    --accent2:#4cc9ff;
+    --good:#69db7c;
+    --bad:#ff8787;
+    --focus:#ffd60a;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  button, input, select{ font:inherit; }
+  button{ cursor:pointer; }
+
+  .page{ max-width:640px; margin:0 auto; padding:14px 10px 48px; }
+  .intro{ font-size:15px; color:var(--dim); line-height:1.5; margin:2px 4px 12px; }
+  .intro strong{ color:#fff; }
+
+  /* ---------- 600 x 600 glasses stage ---------- */
+  .stage-scale-wrap{ width:100%; overflow:hidden; position:relative; margin:0 auto; }
+  #stage{
+    width:600px; height:600px; background:#000; color:#fff;
+    border:1px solid #333; border-radius:18px; overflow:hidden;
+    position:absolute; left:0; top:0;
+    transform-origin:top left;
+  }
+  .view{ position:absolute; inset:0; display:none; flex-direction:column; padding:22px 26px; }
+  .view.active{ display:flex; }
+
+  .app-head{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:14px; }
+  .app-title{ font-size:24px; font-weight:700; letter-spacing:.2px; }
+  .app-sub{ font-size:15px; color:var(--dim); white-space:nowrap; }
+
+  .hint{ font-size:14px; color:var(--faint); line-height:1.45; }
+  .status{ font-size:15px; color:var(--accent2); min-height:22px; line-height:1.4; }
+  .status.warn{ color:var(--bad); }
+  .status.ok{ color:var(--good); }
+
+  /* Focus targets: min 88px tall in the glasses UI, visible ring */
+  .big-btn{
+    display:flex; align-items:center; gap:14px; width:100%; min-height:88px;
+    background:var(--panel2); color:#fff; border:1px solid var(--line);
+    border-radius:12px; padding:14px 18px; text-align:left;
+  }
+  .big-btn .bt-title{ font-size:21px; font-weight:600; line-height:1.25; }
+  .big-btn .bt-meta{ font-size:15px; color:var(--dim); line-height:1.35; margin-top:3px; }
+  .badge{ flex:0 0 auto; font-size:13px; font-weight:700; letter-spacing:.4px; text-transform:uppercase;
+    color:#000; background:var(--accent); border-radius:6px; padding:4px 8px; }
+  .badge.demo{ background:var(--accent2); }
+  .badge.rw{ background:var(--good); }
+  .badge.rss{ background:#ffa94d; }
+
+  /* Adaptive chrome: compact (~56px) at rest so the reading area stays large.
+     A cluster expands to the full 88px+ focus size when navigation enters it,
+     while the stage is "awake" after input, or while a control is focused.
+     :focus-within means a focused control can never be shrunk. */
+  .nav-row{ display:flex; gap:10px; margin-top:12px; }
+  .nav-btn{
+    flex:1; min-height:56px; background:#000; color:#fff; border:1px solid #3a3a3a;
+    border-radius:12px; font-size:16px; font-weight:600; padding:10px 6px;
+    transition:min-height .18s ease, font-size .18s ease;
+  }
+  #stage.awake .nav-btn, .nav-row:focus-within .nav-btn, .nav-btn:focus{
+    min-height:92px; font-size:19px;
+  }
+  .reader-chrome{ display:flex; gap:10px; margin-top:8px; }
+  .reader-btn{
+    flex:1; min-height:52px; border-radius:12px; border:1px solid #3a3a3a;
+    background:var(--panel2); color:#fff; font-size:16px; font-weight:700; padding:8px;
+    transition:min-height .18s ease, font-size .18s ease;
+  }
+  #stage.awake .reader-btn, .reader-chrome:focus-within .reader-btn,
+  .reader-chrome.playing .reader-btn, .reader-btn:focus{
+    min-height:88px; font-size:19px;
+  }
+  button:focus-visible, input:focus-visible, select:focus-visible, .focus-ring{
+    outline:3px solid var(--focus); outline-offset:2px;
+  }
+
+  .doc-list{ display:flex; flex-direction:column; gap:10px; overflow:hidden; }
+
+  /* Reader */
+  .reader-top{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+  .reader-doc{ font-size:16px; color:var(--dim); font-weight:600;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:400px; }
+  .reader-pos{ font-size:16px; color:#fff; font-weight:700; white-space:nowrap; }
+  .progress{ height:5px; background:#222; border-radius:3px; margin:12px 0 18px; overflow:hidden; }
+  .progress > div{ height:100%; background:var(--accent); width:0%; }
+  .ctx{ font-size:17px; color:#666; line-height:1.45; min-height:52px;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .ctx.next{ color:#555; }
+  .current-wrap{ flex:1; display:flex; align-items:center; overflow:hidden; padding:6px 0; }
+  #currText{ font-size:28px; line-height:1.42; font-weight:600; color:#fff; overflow:hidden; }
+  .playing-dot{ display:inline-block; width:10px; height:10px; border-radius:50%;
+    background:var(--good); margin-right:8px; vertical-align:middle; }
+  /* Fixed-height foot: chrome buttons expand inside this reserved space,
+     so expansion never moves the current sentence above it. */
+  .reader-foot{ border-top:1px solid #222; padding-top:12px; height:158px; flex:0 0 158px; overflow:hidden; }
+  .reader-controls{ font-size:14px; color:var(--faint); line-height:1.5; }
+
+  /* Sub-screens */
+  .screen-title{ font-size:24px; font-weight:700; margin-bottom:6px; }
+  .screen-body{ flex:1; overflow-y:auto; scrollbar-width:none; padding-right:2px; }
+  .screen-body::-webkit-scrollbar{ display:none; }
+  .row{ display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:12px 0; border-bottom:1px solid #1c1c1c; }
+  .row-label{ font-size:19px; font-weight:600; }
+  .row-note{ font-size:14px; color:var(--dim); line-height:1.4; margin-top:3px; max-width:330px; }
+  .stepper{ display:flex; align-items:center; gap:8px; }
+  .step-btn{ width:56px; height:56px; border-radius:10px; border:1px solid #3a3a3a;
+    background:var(--panel2); color:#fff; font-size:24px; font-weight:700;
+    transition:width .18s ease, height .18s ease; }
+  .step-btn:focus{ width:88px; height:88px; }
+  .step-val{ font-size:20px; font-weight:700; min-width:74px; text-align:center; }
+  .toggle-btn{ min-height:56px; padding:8px 16px; border-radius:10px; border:1px solid #3a3a3a;
+    background:var(--panel2); color:#fff; font-size:17px; font-weight:600;
+    transition:min-height .18s ease; }
+  .toggle-btn:focus{ min-height:88px; }
+  .field:focus{ min-height:88px; }
+  .toggle-btn[aria-pressed="true"]{ background:var(--accent); color:#000; border-color:var(--accent); }
+  .field{ width:100%; min-height:56px; background:var(--panel2); border:1px solid #3a3a3a;
+    border-radius:10px; color:#fff; padding:12px 14px; font-size:17px; }
+  select.field{ appearance:none; }
+  .primary-btn{ width:100%; min-height:56px; border-radius:12px; border:1px solid var(--accent);
+    background:var(--accent); color:#000; font-size:17px; font-weight:700; padding:12px;
+    transition:min-height .18s ease, font-size .18s ease; }
+  #stage.awake .primary-btn, .primary-btn:focus{ min-height:88px; font-size:20px; }
+  .ghost-btn{ width:100%; min-height:56px; border-radius:12px; border:1px solid #3a3a3a;
+    background:#000; color:#fff; font-size:16px; font-weight:600; padding:12px; margin-top:10px;
+    transition:min-height .18s ease, font-size .18s ease; }
+  #stage.awake .ghost-btn, .ghost-btn:focus{ min-height:88px; font-size:19px; }
+  .help-text{ font-size:16px; line-height:1.55; color:#e8e8e8; }
+  .help-text h3{ font-size:18px; margin:18px 0 6px; color:#fff; }
+  .help-text p{ margin:0 0 10px; }
+  .help-text code{ font-family:ui-monospace, Menlo, Consolas, monospace; font-size:14px; color:var(--accent2); }
+
+  /* ---------- Showcase packet (normal web view, below the stage) ---------- */
+  .packet{ margin-top:34px; }
+  .packet h2{ font-size:26px; margin:30px 4px 8px; line-height:1.25; }
+  .packet h3{ font-size:19px; margin:22px 4px 6px; }
+  .packet p, .packet li{ font-size:16px; line-height:1.6; color:#d9d9d9; }
+  .packet p{ margin:0 4px 10px; }
+  .packet ul, .packet ol{ margin:6px 4px 12px; padding-left:22px; }
+  .panel{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin:12px 0; }
+  .panel p:last-child, .panel ul:last-child{ margin-bottom:0; }
+  .verdict{ border-left:4px solid var(--good); }
+  .copybox{ background:#050505; border:1px dashed #3d3d3d; border-radius:10px; padding:14px 16px; margin:10px 0; }
+  .copybox .cb-label{ font-size:13px; letter-spacing:.5px; text-transform:uppercase; color:var(--faint); margin-bottom:6px; }
+  .copybox .cb-text{ font-size:16px; line-height:1.6; color:#fff; white-space:pre-wrap; }
+  .copybox code{ font-family:ui-monospace, Menlo, Consolas, monospace; font-size:15px; color:var(--accent2); word-break:break-all; }
+  a{ color:var(--accent2); }
+  .checklist{ list-style:none; padding-left:4px; }
+  .checklist li{ padding:7px 0 7px 30px; position:relative; border-bottom:1px solid #1b1b1b; }
+  .checklist li::before{ content:""; position:absolute; left:2px; top:12px; width:15px; height:15px;
+    border:2px solid #555; border-radius:4px; }
+  .checklist li.done::before{ background:var(--good); border-color:var(--good); }
+  .logo-row{ display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+  .logo-cell{ text-align:center; font-size:13px; color:var(--faint); }
+  .small{ font-size:14px; color:var(--dim); }
+  .shot-list{ width:100%; border-collapse:collapse; }
+  .shot-list td{ padding:6px 10px 6px 0; vertical-align:top; font-size:15px; color:#d9d9d9; line-height:1.5; overflow-wrap:break-word; }
+  .shot-list td:first-child{ color:var(--accent); font-weight:700; white-space:nowrap; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <p class="intro"><strong>Display Reader — public demo build.</strong>
+  This is the showcase-safe version: it bundles only two short demo samples and no book text.
+  Connect your own Readwise library, or read the samples offline. The reader below is the real
+  600 × 600 glasses app — on the glasses it fills the whole display; here it is scaled to fit your screen.
+  Use arrow keys and Enter to drive it, just like the Neural Band.</p>
+
+  <div class="stage-scale-wrap">
+  <div id="stage" aria-label="Display Reader demo, 600 by 600 glasses display">
+
+    <!-- LIBRARY -->
+    <section class="view active" id="view-library">
+      <div class="app-head">
+        <div class="app-title">Display Reader</div>
+        <div class="app-sub" id="libCount"></div>
+      </div>
+      <div class="doc-list" id="docList"></div>
+      <div class="status" id="libStatus" style="margin-top:10px;"></div>
+      <div class="nav-row">
+        <button class="nav-btn" data-nav="connect">Connect<br/>+ Feeds</button>
+        <button class="nav-btn" data-nav="settings">Settings</button>
+        <button class="nav-btn" data-nav="help">Help</button>
+      </div>
+      <p class="hint" style="margin-top:12px;">↑ ↓ choose &nbsp;·&nbsp; Enter / pinch opens &nbsp;·&nbsp; Demo build: no book bundled</p>
+    </section>
+
+    <!-- READER -->
+    <section class="view" id="view-reader">
+      <div class="reader-top">
+        <div class="reader-doc" id="readerDoc"></div>
+        <div class="reader-pos" id="readerPos"></div>
+      </div>
+      <div class="progress"><div id="progBar"></div></div>
+      <div class="ctx" id="prevText"></div>
+      <div class="current-wrap"><div id="currText"></div></div>
+      <div class="ctx next" id="nextText"></div>
+      <div class="reader-foot">
+        <div class="status" id="readerStatus">↑ ↓ sentence · ← → jump 5 · Enter play / pause · Esc library</div>
+        <div class="reader-chrome" id="readerChrome">
+          <button class="reader-btn" id="btnPlay" type="button">Play</button>
+          <button class="reader-btn" id="btnLibrary" type="button">Library</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" id="view-settings">
+      <div class="screen-title">Settings</div>
+      <div class="screen-body">
+        <div class="row">
+          <div><div class="row-label">Text size</div><div class="row-note">Current sentence, 22–34 px. Long sentences shrink to fit automatically.</div></div>
+          <div class="stepper">
+            <button class="step-btn" id="tsMinus" aria-label="Decrease text size">−</button>
+            <div class="step-val" id="tsVal">28px</div>
+            <button class="step-btn" id="tsPlus" aria-label="Increase text size">+</button>
+          </div>
+        </div>
+        <div class="row">
+          <div><div class="row-label">Speech rate</div><div class="row-note">0.8×–1.5×. With Unreal Speech this maps to Speed = rate − 1.</div></div>
+          <div class="stepper">
+            <button class="step-btn" id="rateMinus" aria-label="Decrease speech rate">−</button>
+            <div class="step-val" id="rateVal">1.0×</div>
+            <button class="step-btn" id="ratePlus" aria-label="Increase speech rate">+</button>
+          </div>
+        </div>
+        <div class="row">
+          <div><div class="row-label">Voice engine</div><div class="row-note">Glasses voice works offline. Unreal Speech is the engine Readwise Reader uses.</div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="toggle-btn" id="engGlasses" aria-pressed="true">Glasses</button>
+            <button class="toggle-btn" id="engUnreal" aria-pressed="false">Unreal</button>
+          </div>
+        </div>
+        <div class="row">
+          <div><div class="row-label">Unreal voice</div><div class="row-note">Kokoro voices. Default af_sarah.</div></div>
+          <select class="field" id="unrealVoice" style="width:210px;">
+            <option value="af_sarah">af_sarah</option>
+            <option value="af_bella">af_bella</option>
+            <option value="af_nicole">af_nicole</option>
+            <option value="af_sky">af_sky</option>
+            <option value="af">af</option>
+            <option value="am_adam">am_adam</option>
+            <option value="am_michael">am_michael</option>
+            <option value="bf_emma">bf_emma</option>
+            <option value="bf_isabella">bf_isabella</option>
+            <option value="bm_george">bm_george</option>
+            <option value="bm_lewis">bm_lewis</option>
+          </select>
+        </div>
+        <div style="padding:14px 0; border-bottom:1px solid #1c1c1c;">
+          <div class="row-label" style="margin-bottom:8px;">Unreal Speech API key</div>
+          <input class="field" id="unrealKey" type="password" autocomplete="off" placeholder="Paste key — stored on this device only" />
+          <div class="row-note" id="unrealKeyState" style="margin-top:8px; max-width:none;"></div>
+        </div>
+        <div style="padding:14px 0; border-bottom:1px solid #1c1c1c;">
+          <div class="row-label" style="margin-bottom:8px;">API proxy URL <span style="color:var(--dim); font-size:15px;">(optional)</span></div>
+          <input class="field" id="proxyUrl" type="url" autocomplete="off" placeholder="https://your-worker.workers.dev" />
+          <div class="row-note" style="margin-top:8px; max-width:none;">Your own Cloudflare Worker (worker.js from the project repo). Used only when a direct Readwise or RSS call fails — never a public third-party proxy.</div>
+          <div class="row-label" style="margin:16px 0 8px;">Proxy key <span style="color:var(--dim); font-size:15px;">(optional)</span></div>
+          <input class="field" id="proxyKey" type="password" autocomplete="off" placeholder="Matches PROXY_SECRET on the Worker" />
+          <div class="row-note" id="proxyState" style="margin-top:8px; max-width:none;"></div>
+        </div>
+        <button class="primary-btn" id="testVoice" style="margin-top:14px;">Test voice</button>
+        <div class="status" id="settingsStatus" style="margin-top:8px;"></div>
+      </div>
+      <button class="ghost-btn" data-back>← Back to library</button>
+    </section>
+
+    <!-- CONNECT -->
+    <section class="view" id="view-connect">
+      <div class="screen-title">Connect &amp; Feeds</div>
+      <div class="screen-body">
+        <p class="help-text">Paste your Readwise Reader API token. It is stored only in this browser on this device, never in the app source. The app asks Readwise for your Later list first, then New, up to 25 documents, with full text.</p>
+        <input class="field" id="rwToken" type="password" autocomplete="off" placeholder="Readwise token" style="margin:8px 0 12px;" />
+        <button class="primary-btn" id="rwConnect">Connect and load library</button>
+        <div class="status" id="rwStatus" style="margin-top:12px;"></div>
+        <p class="help-text" style="margin-top:14px;">The app tries Readwise <strong>direct</strong> first. Because the Readwise API sends no CORS headers, direct calls usually fail in a browser; if you have set your own proxy in Settings, the app retries through it and the status line names the path in use (Direct / Proxy). If both fail, nothing is broken: the reader falls back to demo mode with the two bundled samples.</p>
+        <h3 style="font-size:20px; margin:22px 0 6px;">Add an RSS feed</h3>
+        <p class="help-text">Paste an RSS or Atom feed URL. The latest 25 items become readable documents in the library, fetched direct first, then through your proxy if one is set.</p>
+        <input class="field" id="feedUrl" type="url" autocomplete="off" placeholder="https://example.com/feed.xml" style="margin:8px 0 12px;" />
+        <button class="primary-btn" id="feedAdd">Add feed</button>
+        <div class="status" id="feedStatus" style="margin-top:12px;"></div>
+        <div id="feedList" style="margin-top:8px;"></div>
+      </div>
+      <button class="ghost-btn" data-back>← Back to library</button>
+    </section>
+
+    <!-- HELP -->
+    <section class="view" id="view-help">
+      <div class="screen-title">Help</div>
+      <div class="screen-body help-text">
+        <h3>Try it without glasses</h3>
+        <p>Install the Meta Ray-Ban Display Simulator Chrome extension, open this page's HTTPS URL in the simulator, and drive it with the arrow keys and Enter. Swipes on the Neural Band arrive as arrow keys; a pinch arrives as Enter.</p>
+        <h3>Load it on the glasses</h3>
+        <p>In the Meta AI app, turn on Developer Mode by tapping the app version number 5 times. Then open Display Glasses settings → App Connections → Web Apps → Add a Web App, and paste this page's HTTPS URL. Requires glasses software v125 or later and Meta AI app v272 or later.</p>
+        <h3>Reading controls</h3>
+        <p>Up / Down: previous / next sentence. Left / Right: jump five sentences. Enter: play or pause read-aloud. Escape or Backspace: back to the library. Your place is saved on the device as you read.</p>
+        <h3>Voices</h3>
+        <p>The glasses voice (speech synthesis) is the default and works offline. Unreal Speech, the engine Readwise Reader uses for listening, is optional: get a free key at <code>unrealspeech.com</code> (250,000 characters per month on the free tier), paste it in Settings, and pick a voice. The key stays on the device. If Unreal fails for a sentence, the app says why and reads that sentence with the glasses voice instead.</p>
+        <h3>Your own proxy (for Readwise &amp; RSS)</h3>
+        <p>Readwise sends no CORS headers, so browsers block direct calls. The fix is a small Cloudflare Worker you deploy yourself: <code>worker.js</code> in the project repo, deployed free with <code>npx wrangler deploy</code>. Paste the Worker URL in Settings → API proxy URL. Its <code>/readwise/…</code> path forwards to the Readwise API and its <code>/fetch?url=…</code> path fetches feed URLs, both with CORS headers added. If you set a <code>PROXY_SECRET</code> on the Worker, put the same value in Settings → Proxy key. Your Readwise token only ever goes to Readwise and to your own Worker — no public third-party proxy is used. The same proxy fallback applies to RSS feeds that block cross-origin reads.</p>
+        <h3>RSS feeds</h3>
+        <p>On the Connect screen, paste any RSS or Atom feed URL; the latest 25 items land in the library with an RSS badge, and the feed is remembered on the device until you remove it there.</p>
+        <h3>Kindle books</h3>
+        <p>Kindle has no public API for book text, so Kindle books only work here as DRM-free EPUBs that you have added to Readwise Reader.</p>
+        <h3>About this demo</h3>
+        <p>This public build bundles no book. The library contains two short demo samples written for this app, plus anything you load yourself through Connect.</p>
+      </div>
+      <button class="ghost-btn" data-back>← Back to library</button>
+    </section>
+
+    <audio id="unrealAudio" preload="auto"></audio>
+  </div>
+  </div>
+
+  <!-- ============ SHOWCASE SUBMISSION PACKET ============ -->
+  <div class="packet">
+    <h2>Showcase submission packet</h2>
+    <p>Everything for the Meta Web Apps showcase form, prepared against this demo build. The form itself is at
+    <a href="https://developers.meta.com/wearables/web-apps-submission/">developers.meta.com/wearables/web-apps-submission</a>.
+    Meta is clear about what it offers: if selected, the app is highlighted on Meta's socials, website, or at events. It is exposure, not free hardware — there is no free Display program attached to it, and the on-device discovery lists are not taking submissions yet.</p>
+
+    <h3>1 · Make the repo public? Yes — for this demo build</h3>
+    <div class="panel verdict">
+      <p><strong>Appropriate to publish:</strong> the demo code with the book removed. This build contains no book text (only the two original demo samples), no API keys or tokens in source — the Readwise token, Unreal key, and proxy settings are typed by each user and kept in their own device's local storage — and no personal data.</p>
+      <p><strong>But not by flipping the existing repo:</strong> the current private repo's git history contains the version with a full preloaded book embedded, so making that repo public would expose the book through its history even with the file deleted. Publish the demo as a <strong>fresh repo (or fresh, history-free history)</strong> containing only this demo build. The book version stays private, history and all.</p>
+    </div>
+
+    <h3>2 · Deploy on johnyoonh.github.io</h3>
+    <div class="panel">
+      <ol>
+        <li>First rename the existing private book repo (GitHub → repo Settings → General → Repository name) to <code>display-reader-book</code>. It stays private; renaming frees the <code>display-reader</code> name, which one account can only use once.</li>
+        <li>Then create a fresh public repo named <code>display-reader</code> — new history, no inherited commits — and push this demo as a single static file (<code>index.html</code>) plus <code>worker.js</code> / <code>wrangler.toml</code> for the optional proxy. No build step, no server.</li>
+        <li>In the new repo: Settings → Pages → deploy from the default branch, root folder. This is project Pages on that repo; your personal site repo (johnyoonh.github.io) is untouched.</li>
+        <li>Public URL once Pages is live (this is the URL the showcase form asks for):</li>
+      </ol>
+      <div class="copybox"><div class="cb-label">Public URL for the form</div><code>https://johnyoonh.github.io/display-reader/</code></div>
+      <p class="small">Serving it from your own GitHub Pages also satisfies the form's HTTPS requirement and the glasses' Add a Web App flow in the Help screen above.</p>
+    </div>
+
+    <h3>3 · Copy for the form</h3>
+    <div class="copybox"><div class="cb-label">App title</div><div class="cb-text">Display Reader</div></div>
+    <div class="copybox"><div class="cb-label">Short description</div><div class="cb-text">A hands-free reader built for the Meta Ray-Ban Display's 600 × 600 screen. Instead of shrinking a webpage, it shows one sentence at a time in large, high-contrast type with its neighbours for context, and reads aloud sentence by sentence. Swipe to move through your Readwise library, pinch to listen — no phone in hand.</div></div>
+    <div class="copybox"><div class="cb-label">Keywords</div><div class="cb-text">reading, read-aloud, text-to-speech, accessibility, hands-free, Readwise, ebooks, glasses</div></div>
+    <div class="copybox"><div class="cb-label">Category</div><div class="cb-text">Productivity / Education — reading</div></div>
+    <div class="copybox"><div class="cb-label">Listed developer</div><div class="cb-text">John Yoon (GitHub: johnyoonh)</div></div>
+
+    <h3>4 · Assets the form asks for</h3>
+    <ul class="checklist">
+      <li>Public HTTPS URL — from the GitHub Pages deployment in step 2; not live yet, verify it loads before pasting it into the form.</li>
+      <li class="done">App title, description, keywords, category — written above, ready to paste.</li>
+      <li class="done">80 × 80 logo — design locked, file included with this page as <code>assets/logo-80.png</code> (shown below at exact size).</li>
+      <li>460 × 460 video — still to record. Easiest path: screen-record the simulator (or the glasses) running the shot list below, then crop to 460 × 460.</li>
+      <li>Name and contact email on the form — yours to enter at submit time.</li>
+    </ul>
+    <div class="panel logo-row">
+      <div class="logo-cell"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFAAAABQCAIAAAABc2X6AAAJ0UlEQVR4nO1bW2xcxRn+/jnn7Nq7DvbaiZWU2mludmyEG8CKIYlNaWqVpKpQ0iIERQK1FenlAR5aGtqHSFTKQxGKVFGJFoFCq1SlRUJNpRZBiiJ72yR2g6MkjteXXEhTnNuub2vves858/dh8No+u2vvrr3HRPInP6zmzMz3f/PP/GfmP2NgGctYxjKWsYzPDWj+GvNXyQjmfFq5z/gZq64tiDvXTtxhTP+EaHqoVpSQrgG5jhxBSoyMfdZMCEg5j6HuMKYRrLh1Dfue1J/YrW+sJo8GcC5jz2CCJXHlU/7rR/Zrb5tjE3NpdpPR2aUgSMbqlfTub7zbWzRMMDiblZ7eCADw04Wz8vEfTV64KNNa4DLjrI6JQARDx/G3ix78imbeZKMMsTBik/mEAo9BJSthj0Erpcv9snFvfHiUeXZccZ9Rn9lAE7BsfO9b+oOPaIkbTB68+LL5zt+t8RiYcwiASobXg10t2qFfeIpGeF29eOk5/Wevml4dlj2DXodp4fvfLhTjT18xdW0W4ywIAoB//9FrX/TxJ/4Xv2tkS5gZTzyq82Wf7PNd/rAoU53gkUIxGjowexpP/1aRY4WPBj4oqlxNE6O8vjV+e5iBeQJsJqhRJ+Dyh8VfrCZzAj8/ZN4e4umATADDY+BXPzFKy2kiyuu/tsiMm78Rv/TfWStZd7QxDOgaQIjFMWnCtme9MHIDQ7GMTTAEaQKvHDDSR95xBiO+eIyjU4yelBkjnE2mmIhSnuULkdSYVsYUZSEYUwfO6eFZliwSfRLv/c0eiTJN9ax+eA3a26p5jYIwpmIuwYuFpIwf/zIxeMspigi3/lXsXUH5b4NzgRuCkwiU0q0IJ0OIWquBu2iB++ec4Kpg24ZlQ/AswRlfkoXBYoWJOwZOwdMBdfFW1NxduczonNKWhJQAw+uBpkHTwJxn9CSCIDCj2AswJKffTrjMOO1hZhBhNMqfDLIESlaKxx7RbBvMUAbk8WdLfLVJW7tOsIWbYb52nTFj+N1ndELXAeCl5wwe9CfO+Ua6fE/s1v3FECK3RIQa6SIPvr5D+1+w2Lzg40/9v3vZA0DXlpgx5XgIlPip811vTb1mjbDux7VPODoxvVvIih4A4PXQl9YRJ0BeRCK85ZvxazeYaNY0WwJGR0v1kqxbL46+4d1YLzDGEPnGcgYsoIRufiof/8Fk2+kMCQB3GdPMG1Wp/C7a/0NjT6tWVUm6yFA1My8AmzEY5veD9sHXzKvXWROwM5yB3GRM32dyYAwdVWvIMCiPsGlLvnad45OzOswE9xmdUPnOhUPTZpyWPgeM89iijtR5I6c0zVIxLmMZdzTyWS66rgOQUsr8cm0LhhCCiIjItm0u6JIVwrkh0HVd1/XU8kJQa5qm67ojXZArdbYeJiJmDgQCR48evXDhwvHjxzs7OwcGBmbWWXTPZ/JkVVVVY2NjS0vLtm3bnn766f7+fiFElqQ5Cx4cHPR6vQDi8Xhvb+/Jkyfb2to6OjoWS3w2Iuvr60tKSlR5XV1dKBQqoOD+/v7S0lIi0rTpXcICxecqEgAz27YthKivr+/t7c1ecLZQKycQCEQiEWaOxWK9vb2JRIJTEIvFzpw58/rrrz/11FMbN2509JNc85nWZFVV1Z49ew4dOnTq1KmxsbHU/qWU/f396pGUsra2Frms5Jw9PDAwUF5efvv27dra2srKyoceeqi5ubmpqWnTpk2G4czzz+35mSIzeVJBSnnx4sXOzs62trYTJ06EQqGurq76+nopZa4ezlNwJBLZsGHD8PCweqppWk1NTVNTU0tLSzbiT548mUgktm7d2tzcnL3IRCKRfBoKhWpra/MQnC2SUzocDjNzOBwOBAJCCMMwZi5mJb6uru7ZZ5996623uru70077eDw+Pj6eWm7bdl9f35EjR/bt29fQ0ODxeBw9G4ahFnxPT4+qn+uUXlBeWkqpDFUhRwihjOjp6enp6Tl8+HCq51UdFedViCKiS5cuZfKkpmlEpIhs21Y/FmJztkjr4WS5o6YQQtd1h+eFEJs3b7569aqU0rZtZf3o6Oi2bdsc818FM+XJtGYAWBoPp0Uylir7lH4AlmWFQqFoNKrCgXpkmubHH39smmby1aVkLLpVSRT2U0tSPE3B4Qoi8vv9k5OTBd8VT8G9Ty1Jtzvg3rIE4PK3JUEgLM0Ba9oG95gEJMOUJQCD3f1kONMMFziIwMwVpfSXQ/oq3wkGkWYAElgC2e552LLx2E5PpfUdXNlN4/8EaYAGSM3dL7auso1EmaUX0X/gSiuu7EL8OMM3Mi6I4JpsVwVrAgSGtgLCj+j7fHlnceSxR3fYzLBsFsIN2UtxA4BtQJK+glBcnPjw6G8nPzhc1LpdkzLjt5hFxNJdeWAbYGCFjFPrw+KDt73tfyra26ppC74jPjeW/I4HswQswEPVX6DKcqJ8rw5nCVdv8cyGAAgY18q83efw6puJ379nuTCll0SwABHbUYATnoYX9l95851R0wIATUMhDw6KO1/kcZ1MSjA08ASsMXi/TNV/GC//6I0/G6YFXSdCtmoXcpMtTw8zcyKRICJd11U6ct4DAAP+YiKMsXcLVr6Au56E8NDQcKDUDodh2/N8D1YnLSHEAtMAeXpY1/U1a9Yws2maycSFOvRnGn5Dp/+cN4e8v8aGDi57BuRRgdq2M96yVMlglQxQ52TTNKWUFRUVKmeSj+V5tLEsy+fznTp16vz588FgsL29vaur6/r165ZlzTRUnQeZmRlENDwqH35Gnj2/N0CGtE0SGijN92/lSZXWUbkRVV5RUbFly5YdO3Y0Nzc3NDSUlZVZluVIqiwmkimeaDSamnyLRCJtbW0HDx7ctWvX6tWrHQ1VLlq9bnpD3cwyOS0jkUggEEjWcaQHKioqdu7ceeDAgWPHjt28eTOVl5kLlZfG1Njfd999apgbGxurq6tTqw0NDTk8n3wkBPX0hGpqapI5kKGhoU2bNoXD4ZkiZ3py1apVqRSDg4Nnzpxpb28PBoMdHR0qMbr4gh3w+Xz33HPP9u3bm5ubH3jggbVr16bWSYoPBoOnT5++ceNGd3e3SqArweFw+O677/b7/ffff7/qag6RXV1dqquzZ8+OjIzkZ3bOglWodKTashE/PDx87ty5e++9t6ysTAU5ALFYrLOzs66uLleRac3IBvl72JGLTpbPLV4tPLXkVIrLsfyyEbmQ19Li7FvzE59EoUUWFpkS8T6fb+vWrc8//3wwGFSvnL6+vv3797e0tJSWls6smWxeiP8NKOx/G6T1vGEY69evB3Dr1q1IJKIK7wBP5oqk52cWFs6TGc1wjWmakkgpVAHMfQOWsYxlLOPOwf8BFuYRvwzi02UAAAAASUVORK5CYII=" width="80" height="80" alt="Display Reader logo at 80 by 80 pixels: amber glasses above a white open book with an amber play triangle, on black" /><br/>logo-80.png · 80 × 80</div>
+      <p class="small" style="max-width:420px;">Logo: amber glasses over an open book with a play mark, on pure black — it reads at 80 px and matches the additive display, where black renders transparent.</p>
+    </div>
+
+    <h3>5 · Shot list for the 460 × 460 video</h3>
+    <div class="panel">
+      <table class="shot-list">
+        <tr><td>0–3s</td><td>Library screen. Two demo samples listed; swipe down once so the focus ring moves.</td></tr>
+        <tr><td>3–7s</td><td>Pinch to open a sample. The sentence view lands: one large sentence, neighbours dimmed above and below.</td></tr>
+        <tr><td>7–12s</td><td>Pinch again to start read-aloud. Let two sentences play and advance on their own.</td></tr>
+        <tr><td>12–16s</td><td>Swipe right to jump five sentences; swipe up to step back one. Show the position counter moving.</td></tr>
+        <tr><td>16–20s</td><td>Open Settings, switch the voice engine to Unreal Speech, tap Test voice. End on the reader, mid-sentence.</td></tr>
+      </table>
+      <p class="small">Record in the simulator at 600 × 600 and centre-crop, or record on the glasses. Keep it silent-safe: every action is visible, nothing depends on hearing the audio.</p>
+    </div>
+
+    <h3>6 · Before you hit submit</h3>
+    <ul>
+      <li>Open the public URL on the glasses once (Help screen has the Add a Web App steps) and read a full sample end to end.</li>
+      <li>Confirm the public repo contains this demo file only — search it for the book title before submitting; it should return nothing.</li>
+      <li>Rotate the Readwise token you once pasted into chat, and use the in-app Connect screen for tokens from now on.</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+var LS = { settings:"drdemo.settings", pos:"drdemo.positions", unrealKey:"drdemo.unrealKey", rwToken:"drdemo.rwToken",
+  proxyUrl:"drdemo.proxyUrl", proxyKey:"drdemo.proxyKey", feeds:"drdemo.feeds" };
+function lsGet(k, d){ try{ var v = localStorage.getItem(k); return v===null? d : JSON.parse(v); }catch(e){ return d; } }
+function lsSet(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+
+/* ---------------- Demo sample texts (original, written for this demo) ---------------- */
+var DEMO_TEXT_1 = [
+ "This is the demo library, and no book is bundled in this public build.",
+ "Use the controls to step through these sample sentences one at a time.",
+ "The current sentence appears large in the centre of the display.",
+ "The sentences before and after it appear smaller, so you can keep your place without scanning a whole page.",
+ "Press Enter, or pinch, to hear the text read aloud.",
+ "Use the up and down swipes to move by one sentence.",
+ "Use the left and right swipes to jump five sentences at a time.",
+ "A narrow view suits a small display, because your eyes only ever need one thought at a time.",
+ "When a paragraph is too long for the screen, the reader splits it at clause boundaries and steps through the pieces in order, so nothing is ever cut off or lost.",
+ "Your place is saved on this device as you read, and you can leave and return without hunting for it.",
+ "When you are ready, connect your own Readwise library from the Connect screen, or keep reading offline with the samples on this device.",
+ "That is the whole idea: your books, one sentence at a time, at a glance."
+].join(" ");
+
+var DEMO_TEXT_2 = [
+ "On a clear morning the path from the village rises slowly through pine trees and open grass, past a low stone wall that has stood for longer than anyone can remember, and on toward a ridge where the wind moves steadily and the whole valley opens below in bands of green and gold; walkers who take this path in spring notice the small flowers first, then the sound of water under the bridge, then the quiet that settles when the road behind them finally disappears around the bend, and by the time they reach the top most of them have slowed down without deciding to, because there is nothing on the ridge that asks them to hurry and nothing in the view that rewards a quick glance over a long look.",
+ "That single paragraph is longer than this display can hold at once.",
+ "The reader split it into display-sized pieces at its clause boundaries, and you stepped through them in order, like sentences.",
+ "Nothing overflowed the header, the controls, or the footer.",
+ "Short paragraphs need no splitting, and they read exactly as written."
+].join("\n");
+
+/* ---------------- Sentence handling ---------------- */
+function splitLongPiece(piece){
+  if(piece.length <= 420) return [piece];
+  var out = [], rest = piece;
+  while(rest.length > 420){
+    var cut = -1;
+    var windowText = rest.slice(0, 421);
+    var marks = ["; ", ": ", ", ", " — ", " - "];
+    for(var m=0; m<marks.length; m++){
+      var idx = windowText.lastIndexOf(marks[m]);
+      if(idx > cut) cut = idx + marks[m].length - 1;
+    }
+    if(cut < 200){
+      var sp = windowText.lastIndexOf(" ");
+      cut = sp > 200 ? sp : 420;
+    }
+    out.push(rest.slice(0, cut+ (rest[cut]===" " ? 0 : 0)).trim());
+    rest = rest.slice(cut).trim();
+    if(!rest) break;
+  }
+  if(rest) out.push(rest);
+  return out.filter(function(s){ return s.length>0; });
+}
+function textToPieces(text){
+  var pieces = [];
+  var blocks = String(text).replace(/\r\n/g,"\n").split(/\n+/);
+  blocks.forEach(function(block){
+    var clean = block.replace(/\s+/g," ").trim();
+    if(!clean) return;
+    var sentences = clean.match(/[^.!?…]+[.!?…]+["”’']*\s*|[^.!?…]+$/g) || [clean];
+    sentences.forEach(function(s){
+      var t = s.trim();
+      if(!t) return;
+      splitLongPiece(t).forEach(function(p){ pieces.push(p); });
+    });
+  });
+  return pieces;
+}
+
+/* ---------------- State ---------------- */
+var settings = Object.assign({ textSize:28, rate:1.0, engine:"glasses", unrealVoice:"af_sarah" }, lsGet(LS.settings, {}));
+var positions = lsGet(LS.pos, {});
+var docs = [
+  { id:"demo-welcome", title:"Welcome to Display Reader", author:"Display Reader demo", badge:"demo", badgeText:"Demo sample", pieces:textToPieces(DEMO_TEXT_1) },
+  { id:"demo-long", title:"A Long Paragraph, Split for the Display", author:"Display Reader demo", badge:"demo", badgeText:"Demo sample", pieces:textToPieces(DEMO_TEXT_2) }
+];
+var currentDoc = null, currentIdx = 0, currentView = "library";
+
+/* ---------------- Elements ---------------- */
+function el(id){ return document.getElementById(id); }
+var stage = el("stage"), docList = el("docList"), libCount = el("libCount"), libStatus = el("libStatus");
+var readerDoc = el("readerDoc"), readerPos = el("readerPos"), progBar = el("progBar");
+var prevText = el("prevText"), currText = el("currText"), nextText = el("nextText"), readerStatus = el("readerStatus");
+var audioEl = el("unrealAudio");
+var btnPlay = el("btnPlay"), btnLibrary = el("btnLibrary"), readerChrome = el("readerChrome");
+
+/* Adaptive chrome: any navigation input wakes the stage (controls expand);
+   after ~4s idle they shrink back. CSS :focus-within / :focus and the
+   .playing state override the shrink, so a focused control — or the play
+   control while read-aloud runs through it — never shrinks. */
+var idleTimer = null;
+function wakeChrome(){
+  stage.classList.add("awake");
+  if(idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(function(){ stage.classList.remove("awake"); }, 4000);
+}
+document.addEventListener("keydown", wakeChrome);
+stage.addEventListener("pointerdown", wakeChrome);
+
+/* ---------------- View switching & focus ---------------- */
+var views = ["library","reader","settings","connect","help"];
+function showView(name){
+  if(name !== "reader") stopSpeech("left reader");
+  currentView = name;
+  views.forEach(function(v){ el("view-"+v).classList.toggle("active", v===name); });
+  focusFirst(name);
+}
+function focusablesIn(viewEl){
+  return Array.prototype.slice.call(viewEl.querySelectorAll("button, input, select")).filter(function(n){
+    return n.offsetParent !== null || n === document.activeElement;
+  });
+}
+function focusFirst(name){
+  var list = focusablesIn(el("view-"+name));
+  if(list.length) list[0].focus({ preventScroll:true });
+}
+function moveFocus(dir){
+  var list = focusablesIn(el("view-"+currentView));
+  if(!list.length) return;
+  var i = list.indexOf(document.activeElement);
+  i = i < 0 ? 0 : (i + dir + list.length) % list.length;
+  list[i].focus(); /* allow the sub-screen's own scroll area to reveal it */
+}
+
+/* ---------------- Library ---------------- */
+function renderLibrary(){
+  docList.replaceChildren();
+  docs.forEach(function(doc){
+    var b = document.createElement("button");
+    b.className = "big-btn"; b.type = "button";
+    var main = document.createElement("span"); main.style.flex = "1";
+    var t = document.createElement("span"); t.className = "bt-title"; t.textContent = doc.title;
+    var m = document.createElement("span"); m.className = "bt-meta";
+    m.textContent = doc.author + " · " + doc.pieces.length + " steps";
+    main.appendChild(t); main.appendChild(document.createElement("br")); main.appendChild(m);
+    var badge = document.createElement("span");
+    badge.className = "badge " + doc.badge; badge.textContent = doc.badgeText;
+    b.appendChild(main); b.appendChild(badge);
+    b.addEventListener("click", function(){ openDoc(doc); });
+    docList.appendChild(b);
+  });
+  libCount.textContent = docs.length + (docs.length===1 ? " item" : " items");
+}
+
+/* ---------------- Reader ---------------- */
+function savePos(){ if(currentDoc){ positions[currentDoc.id] = currentIdx; lsSet(LS.pos, positions); } }
+function openDoc(doc){
+  currentDoc = doc;
+  currentIdx = Math.min(positions[doc.id] || 0, doc.pieces.length - 1);
+  if(currentIdx < 0) currentIdx = 0;
+  showView("reader");
+  renderReader();
+}
+function setIdx(i){
+  if(!currentDoc) return;
+  currentIdx = Math.max(0, Math.min(currentDoc.pieces.length - 1, i));
+  savePos(); renderReader();
+}
+function renderReader(){
+  if(!currentDoc) return;
+  readerDoc.textContent = currentDoc.title;
+  readerPos.textContent = (currentIdx+1) + " / " + currentDoc.pieces.length;
+  progBar.style.width = ((currentIdx+1)/currentDoc.pieces.length*100) + "%";
+  prevText.textContent = currentIdx > 0 ? currentDoc.pieces[currentIdx-1] : "";
+  currText.textContent = currentDoc.pieces[currentIdx] || "";
+  nextText.textContent = currentIdx < currentDoc.pieces.length-1 ? currentDoc.pieces[currentIdx+1] : "";
+  fitCurrent();
+}
+function fitCurrent(){
+  var size = settings.textSize;
+  currText.style.fontSize = size + "px";
+  requestAnimationFrame(function(){
+    var maxH = 250;
+    var guard = 0;
+    while((currText.scrollHeight > maxH || currText.scrollWidth > 548) && size > 16 && guard < 12){
+      size -= 2; currText.style.fontSize = size + "px"; guard++;
+    }
+  });
+}
+function setReaderStatus(msg, kind){
+  readerStatus.textContent = msg || "";
+  readerStatus.className = "status" + (kind ? " " + kind : "");
+}
+
+/* ---------------- Speech: shared ---------------- */
+var speech = {
+  playing:false, paused:false, seq:0, failures:0,
+  chunks:[], chunkIdx:0, currentUtter:null,
+  lastProgress:Date.now(), watchdog:null, usingUnreal:false
+};
+function splitChunks(text){
+  if(text.length <= 180) return [text];
+  var out = [], rest = text;
+  while(rest.length > 180){
+    var w = rest.slice(0,181), cut = -1;
+    [". ", "; ", ", ", " "].forEach(function(mark){
+      var i = w.lastIndexOf(mark); if(i > cut) cut = i + mark.length - 1;
+    });
+    if(cut < 80) cut = 180;
+    out.push(rest.slice(0, cut+1).trim()); rest = rest.slice(cut+1).trim();
+    if(!rest) break;
+  }
+  if(rest) out.push(rest);
+  return out.filter(Boolean);
+}
+function startWatchdog(){
+  stopWatchdog();
+  speech.watchdog = setInterval(function(){
+    if(!speech.playing || speech.paused || speech.usingUnreal) return;
+    var ss = window.speechSynthesis; if(!ss) return;
+    if(ss.paused){ try{ ss.resume(); }catch(e){} }
+    if(!ss.speaking && !ss.pending && Date.now() - speech.lastProgress > 2500){
+      /* an end event was dropped: recover by advancing */
+      speech.lastProgress = Date.now();
+      advanceChunk();
+    }
+  }, 1000);
+}
+function stopWatchdog(){ if(speech.watchdog){ clearInterval(speech.watchdog); speech.watchdog = null; } }
+function syncPlayUI(){
+  btnPlay.textContent = speech.playing ? (speech.paused ? "Resume" : "Pause") : "Play";
+  readerChrome.classList.toggle("playing", !!speech.playing);
+}
+function stopSpeech(){
+  speech.seq++;
+  speech.playing = false; speech.paused = false; speech.usingUnreal = false;
+  stopWatchdog();
+  var ss = window.speechSynthesis;
+  if(ss && (ss.speaking || ss.pending)){ try{ ss.cancel(); }catch(e){} }
+  try{ audioEl.pause(); }catch(e){}
+  syncPlayUI();
+}
+function stopCleanly(reason){
+  stopSpeech();
+  setReaderStatus("Reading stopped: " + reason + " Press Enter to try again.", "warn");
+}
+function onSpeakFailure(kind){
+  speech.failures++;
+  if(speech.failures >= 12){ stopCleanly("the voice failed repeatedly."); return true; }
+  setReaderStatus("Voice hiccup (" + kind + ") — skipped ahead.", "warn");
+  return false;
+}
+
+/* Glasses voice chain */
+function speakGlassesSentence(){
+  var ss = window.speechSynthesis;
+  if(!ss){ stopCleanly("speech synthesis is not available on this device."); return; }
+  var mySeq = speech.seq;
+  speech.usingUnreal = false;
+  speech.chunks = splitChunks(currentDoc.pieces[currentIdx]);
+  speech.chunkIdx = 0;
+  speakChunk(mySeq);
+}
+function speakChunk(mySeq){
+  if(mySeq !== speech.seq || !speech.playing) return;
+  if(speech.chunkIdx >= speech.chunks.length){ advanceSentence(); return; }
+  var ss = window.speechSynthesis;
+  var utter = new SpeechSynthesisUtterance(speech.chunks[speech.chunkIdx]);
+  utter.rate = settings.rate;
+  speech.currentUtter = utter;           /* persistent reference: never GC'd mid-speech */
+  window.__drCurrentUtter = utter;
+  speech.lastProgress = Date.now();
+  utter.onend = function(){
+    if(mySeq !== speech.seq) return;     /* stale event from a cancelled chain */
+    speech.failures = 0; speech.lastProgress = Date.now();
+    speech.chunkIdx++; speakChunk(mySeq);
+  };
+  utter.onerror = function(ev){
+    if(mySeq !== speech.seq) return;
+    if(ev && ev.error === "interrupted") return;
+    speech.lastProgress = Date.now();
+    if(onSpeakFailure(ev && ev.error ? ev.error : "error")) return;
+    speech.chunkIdx++; speakChunk(mySeq);
+  };
+  try{ ss.speak(utter); }catch(e){
+    if(!onSpeakFailure("start failed")){ speech.chunkIdx++; speakChunk(mySeq); }
+  }
+}
+
+/* Unreal Speech */
+function hashStr(s){ var h = 5381; for(var i=0;i<s.length;i++){ h = ((h<<5)+h+s.charCodeAt(i))|0; } return (h>>>0).toString(36); }
+function speakUnrealSentence(){
+  var key = lsGet(LS.unrealKey, "");
+  var sentence = currentDoc.pieces[currentIdx];
+  var mySeq = speech.seq;
+  speech.usingUnreal = true;
+  if(!key){
+    setReaderStatus("Unreal Speech needs an API key (Settings). Using the glasses voice for this sentence.", "warn");
+    speakGlassesSentence(); return;
+  }
+  var cacheKey = "https://cache.invalid/unreal/" + settings.unrealVoice + "/" + hashStr(sentence);
+  function playBlob(blob){
+    if(mySeq !== speech.seq) return;
+    var url = URL.createObjectURL(blob);
+    audioEl.src = url;
+    speech.lastProgress = Date.now();
+    audioEl.onended = function(){
+      URL.revokeObjectURL(url);
+      if(mySeq !== speech.seq) return;
+      speech.failures = 0; advanceSentence();
+    };
+    audioEl.onerror = function(){
+      URL.revokeObjectURL(url);
+      if(mySeq !== speech.seq) return;
+      fallbackToGlasses("audio playback failed.");
+    };
+    var p = audioEl.play();
+    if(p && p.catch) p.catch(function(){ fallbackToGlasses("audio playback was blocked."); });
+  }
+  function fallbackToGlasses(why){
+    if(mySeq !== speech.seq) return;
+    setReaderStatus("Unreal Speech unavailable (" + why + ") Using the glasses voice for this sentence.", "warn");
+    speakGlassesSentence();
+  }
+  function fetchAudio(){
+    fetch("https://api.v8.unrealspeech.com/stream", {
+      method:"POST",
+      headers:{ "Authorization":"Bearer " + key, "Content-Type":"application/json" },
+      body: JSON.stringify({
+        Text: sentence.slice(0, 1000),
+        VoiceId: settings.unrealVoice,
+        Bitrate: "192k",
+        Speed: String(Math.max(-1, Math.min(1, settings.rate - 1))),
+        Pitch: "1",
+        Codec: "libmp3lame"
+      })
+    }).then(function(res){
+      if(!res.ok) throw new Error("API error " + res.status);
+      return res.blob();
+    }).then(function(blob){
+      if(window.caches){
+        caches.open("unreal-audio-v1").then(function(c){ c.put(cacheKey, new Response(blob.slice(0), { headers:{ "Content-Type":"audio/mpeg" } })); }).catch(function(){});
+      }
+      playBlob(blob);
+    }).catch(function(err){
+      fallbackToGlasses(err && err.message ? err.message : "network error");
+    });
+  }
+  if(window.caches){
+    caches.open("unreal-audio-v1").then(function(c){
+      return c.match(cacheKey);
+    }).then(function(hit){
+      if(hit){ hit.blob().then(playBlob); } else { fetchAudio(); }
+    }).catch(fetchAudio);
+  } else { fetchAudio(); }
+}
+
+function speakCurrent(){
+  if(!currentDoc) return;
+  speech.seq++;
+  var mySeq = speech.seq;
+  var ss = window.speechSynthesis;
+  if(ss && (ss.speaking || ss.pending)){
+    try{ ss.cancel(); }catch(e){}
+    setTimeout(function(){ if(mySeq === speech.seq) beginSpeak(); }, 120);
+  } else { beginSpeak(); }
+}
+function beginSpeak(){
+  speech.playing = true; speech.paused = false; speech.failures = 0;
+  speech.lastProgress = Date.now();
+  startWatchdog(); syncPlayUI();
+  setReaderStatus("Reading aloud · " + (settings.engine === "unreal" ? "Unreal Speech (" + settings.unrealVoice + ")" : "glasses voice"), "");
+  if(settings.engine === "unreal") speakUnrealSentence(); else speakGlassesSentence();
+}
+function advanceChunk(){
+  if(!speech.playing) return;
+  speech.chunkIdx++;
+  speakChunk(speech.seq);
+}
+function advanceSentence(){
+  if(!speech.playing || !currentDoc) return;
+  if(currentIdx >= currentDoc.pieces.length - 1){
+    stopSpeech(); setReaderStatus("Finished. Esc returns to the library.", "ok"); return;
+  }
+  setIdx(currentIdx + 1);
+  if(settings.engine === "unreal" && speech.usingUnreal) speakUnrealSentence();
+  else if(settings.engine === "unreal") speakUnrealSentence();
+  else speakGlassesSentence();
+}
+function togglePlay(){
+  if(!currentDoc) return;
+  if(!speech.playing){ speakCurrent(); return; }
+  if(speech.usingUnreal){
+    if(speech.paused){ speech.paused = false; audioEl.play(); setReaderStatus("Reading aloud · Unreal Speech", ""); }
+    else { speech.paused = true; audioEl.pause(); setReaderStatus("Paused. Enter resumes.", ""); }
+    syncPlayUI(); return;
+  }
+  var ss = window.speechSynthesis; if(!ss) return;
+  if(speech.paused){ speech.paused = false; try{ ss.resume(); }catch(e){} setReaderStatus("Reading aloud · glasses voice", ""); }
+  else { speech.paused = true; try{ ss.pause(); }catch(e){} setReaderStatus("Paused. Enter resumes.", ""); }
+  syncPlayUI();
+}
+btnPlay.addEventListener("click", function(){ togglePlay(); });
+btnLibrary.addEventListener("click", function(){ showView("library"); });
+
+/* ---------------- Settings ---------------- */
+function saveSettings(){ lsSet(LS.settings, settings); renderSettings(); }
+function maskKey(k){ return k ? "Key saved ····" + k.slice(-4) + " — never shown in full." : "No key saved. The glasses voice needs none."; }
+function renderSettings(){
+  el("tsVal").textContent = settings.textSize + "px";
+  el("rateVal").textContent = settings.rate.toFixed(1) + "×";
+  el("engGlasses").setAttribute("aria-pressed", settings.engine === "glasses" ? "true" : "false");
+  el("engUnreal").setAttribute("aria-pressed", settings.engine === "unreal" ? "true" : "false");
+  el("unrealVoice").value = settings.unrealVoice;
+  el("unrealKeyState").textContent = maskKey(lsGet(LS.unrealKey, ""));
+  var pk = lsGet(LS.proxyKey, ""), pu = lsGet(LS.proxyUrl, "");
+  el("proxyState").textContent = pu
+    ? "Proxy set: " + pu + (pk ? " · key saved ····" + pk.slice(-4) : " · no key")
+    : "No proxy set. Direct calls are tried first either way.";
+  if(currentDoc) renderReader();
+}
+el("proxyUrl").addEventListener("change", function(){
+  lsSet(LS.proxyUrl, this.value.trim().replace(/\/+$/, ""));
+  renderSettings();
+});
+el("proxyKey").addEventListener("change", function(){
+  var v = this.value.trim();
+  if(v) lsSet(LS.proxyKey, v);
+  this.value = "";
+  renderSettings();
+});
+el("tsMinus").addEventListener("click", function(){ settings.textSize = Math.max(22, settings.textSize - 2); saveSettings(); });
+el("tsPlus").addEventListener("click", function(){ settings.textSize = Math.min(34, settings.textSize + 2); saveSettings(); });
+el("rateMinus").addEventListener("click", function(){ settings.rate = Math.max(0.8, Math.round((settings.rate - 0.1)*10)/10); saveSettings(); });
+el("ratePlus").addEventListener("click", function(){ settings.rate = Math.min(1.5, Math.round((settings.rate + 0.1)*10)/10); saveSettings(); });
+el("engGlasses").addEventListener("click", function(){ settings.engine = "glasses"; saveSettings(); });
+el("engUnreal").addEventListener("click", function(){ settings.engine = "unreal"; saveSettings(); });
+el("unrealVoice").addEventListener("change", function(){ settings.unrealVoice = this.value; saveSettings(); });
+el("unrealKey").addEventListener("change", function(){
+  var v = this.value.trim();
+  if(v){ lsSet(LS.unrealKey, v); }
+  this.value = "";
+  renderSettings();
+  el("settingsStatus").textContent = v ? "Unreal key saved on this device." : "";
+});
+el("testVoice").addEventListener("click", function(){
+  var st = el("settingsStatus");
+  var testDoc = { id:"__test", title:"Voice test", pieces:["This is Display Reader. The voice you picked is working."] };
+  var savedDoc = currentDoc, savedIdx = currentIdx;
+  currentDoc = testDoc; currentIdx = 0;
+  st.textContent = "Playing test sentence…";
+  stopSpeech();
+  setTimeout(function(){
+    speech.playing = true; speech.paused = false; startWatchdog();
+    if(settings.engine === "unreal") speakUnrealSentence(); else speakGlassesSentence();
+    setTimeout(function(){ currentDoc = savedDoc; currentIdx = savedIdx; }, 400);
+  }, 150);
+});
+
+/* ---------------- Connect: Readwise ---------------- */
+function parseHtmlToText(html){
+  var parser = new DOMParser();
+  var doc = parser.parseFromString(String(html || ""), "text/html"); /* inert document only */
+  return doc.body ? doc.body.textContent || "" : "";
+}
+function proxyBase(){ var u = lsGet(LS.proxyUrl, ""); return u ? String(u).replace(/\/+$/, "") : ""; }
+function proxyHeaders(){
+  var k = lsGet(LS.proxyKey, "");
+  return k ? { "X-Proxy-Key": k } : {};
+}
+function rwFetchJson(useProxy, loc, token){
+  var path = "list/?location=" + loc + "&withHtmlContent=true&limit=25";
+  var url = useProxy ? proxyBase() + "/readwise/" + path : "https://readwise.io/api/v3/" + path;
+  var headers = Object.assign({ "Authorization": "Token " + token }, useProxy ? proxyHeaders() : {});
+  return fetch(url, { headers: headers }).then(function(r){
+    if(!r.ok) throw new Error("Readwise replied " + r.status);
+    return r.json();
+  });
+}
+function rwLoad(useProxy, token){
+  return rwFetchJson(useProxy, "later", token).then(function(data){
+    var results = (data && data.results) || [];
+    if(!results.length) return rwFetchJson(useProxy, "new", token).then(function(d2){ return (d2 && d2.results) || []; });
+    return results;
+  });
+}
+el("rwConnect").addEventListener("click", function(){
+  var token = el("rwToken").value.trim() || lsGet(LS.rwToken, "");
+  var st = el("rwStatus");
+  if(!token){ st.textContent = "Paste a Readwise token first — or just use the demo samples."; st.className = "status warn"; return; }
+  lsSet(LS.rwToken, token);
+  st.textContent = "Contacting Readwise (Direct)…"; st.className = "status";
+  function done(pathUsed, results){
+    if(!results.length){
+      st.textContent = "Path: " + pathUsed + " — connected, but no documents were returned. Demo samples are still in the library.";
+      st.className = "status warn"; return;
+    }
+    var added = 0;
+    results.forEach(function(item, i){
+      var text = parseHtmlToText(item.content || item.html_content || "");
+      var pieces = textToPieces(text || item.summary || "");
+      if(!pieces.length) return;
+      var nd = { id:"rw-" + (item.id || i), title:"Untitled", author:"Readwise", badge:"rw", badgeText:"Readwise", pieces:pieces };
+      nd.title = String(item.title || "Untitled");       /* textContent only, never innerHTML */
+      nd.author = String(item.author || "Readwise");
+      docs = docs.filter(function(d){ return d.id !== nd.id; });
+      docs.push(nd); added++;
+    });
+    renderLibrary();
+    st.textContent = "Path: " + pathUsed + " — loaded " + added + " document" + (added===1?"":"s") + " from Readwise into the library.";
+    st.className = "status ok";
+    libStatus.textContent = st.textContent; libStatus.className = "status ok";
+  }
+  function totalFail(err){
+    st.textContent = "Could not reach Readwise (" + (err && err.message ? err.message : "network/CORS") + "). The Readwise API sends no CORS headers, so browsers block direct calls; set your own proxy URL in Settings to route through your Worker. Until then the reader stays in demo mode with the bundled samples. Nothing was lost.";
+    st.className = "status warn";
+  }
+  rwLoad(false, token).then(function(r){ done("Direct", r); }).catch(function(err){
+    if(proxyBase()){
+      st.textContent = "Direct failed (" + (err && err.message ? err.message : "CORS") + "). Retrying through your proxy…";
+      rwLoad(true, token).then(function(r){ done("Proxy", r); }).catch(totalFail);
+    } else { totalFail(err); }
+  });
+});
+
+/* ---------------- RSS feeds ---------------- */
+function childByLocal(item, names){
+  var kids = item.childNodes || [];
+  for(var i=0;i<kids.length;i++){
+    if(kids[i].nodeType === 1 && names.indexOf(kids[i].localName) >= 0) return kids[i];
+  }
+  return null;
+}
+function fetchFeedText(url){
+  function direct(){
+    return fetch(url).then(function(r){
+      if(!r.ok) throw new Error("feed replied " + r.status);
+      return r.text();
+    });
+  }
+  return direct().then(function(t){ return { text:t, path:"Direct" }; }).catch(function(err){
+    if(!proxyBase()) throw err;
+    var purl = proxyBase() + "/fetch?url=" + encodeURIComponent(url);
+    return fetch(purl, { headers: proxyHeaders() }).then(function(r){
+      if(!r.ok) throw new Error("proxy replied " + r.status);
+      return r.text();
+    }).then(function(t){ return { text:t, path:"Proxy" }; });
+  });
+}
+function parseFeedItems(xmlText, feedUrl){
+  var parser = new DOMParser();
+  var xdoc = parser.parseFromString(String(xmlText || ""), "text/xml"); /* inert document only */
+  if(xdoc.getElementsByTagName("parsererror").length) throw new Error("that URL did not return a readable RSS/Atom feed");
+  var feedTitle = "";
+  var titles = xdoc.getElementsByTagName("title");
+  if(titles.length) feedTitle = (titles[0].textContent || "").trim();
+  var items = [];
+  var nodes = xdoc.querySelectorAll("item, entry");
+  for(var i=0; i<nodes.length && items.length < 25; i++){
+    var item = nodes[i];
+    var tEl = childByLocal(item, ["title"]);
+    var title = tEl ? (tEl.textContent || "").trim() : "Untitled item";
+    var link = "";
+    var lEl = childByLocal(item, ["link"]);
+    if(lEl){ link = (lEl.getAttribute("href") || lEl.textContent || "").trim(); }
+    var bodyEl = childByLocal(item, ["encoded", "description", "content", "summary"]);
+    var bodyHtml = bodyEl ? bodyEl.textContent || "" : "";
+    var text = parseHtmlToText(bodyHtml);
+    var pieces = textToPieces(text || title);
+    if(!pieces.length) continue;
+    items.push({
+      id: "rss-" + hashStr(feedUrl + "|" + (link || title)),
+      title: title, author: feedTitle || "RSS feed",
+      badge: "rss", badgeText: "RSS", feedUrl: feedUrl, pieces: pieces
+    });
+  }
+  return items;
+}
+function renderFeedList(){
+  var wrap = el("feedList");
+  wrap.replaceChildren();
+  var feeds = lsGet(LS.feeds, []);
+  feeds.forEach(function(url){
+    var row = document.createElement("div");
+    row.style.cssText = "display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #1c1c1c;";
+    var label = document.createElement("span");
+    label.style.cssText = "flex:1; font-size:14px; color:var(--dim); word-break:break-all;";
+    label.textContent = url;
+    var rm = document.createElement("button");
+    rm.className = "toggle-btn"; rm.type = "button"; rm.textContent = "Remove";
+    rm.addEventListener("click", function(){
+      var f = lsGet(LS.feeds, []).filter(function(u){ return u !== url; });
+      lsSet(LS.feeds, f);
+      docs = docs.filter(function(d){ return d.feedUrl !== url; });
+      renderLibrary(); renderFeedList();
+      el("feedStatus").textContent = "Feed removed, along with its items.";
+      el("feedStatus").className = "status";
+    });
+    row.appendChild(label); row.appendChild(rm);
+    wrap.appendChild(row);
+  });
+}
+function addFeed(url, silent){
+  var st = el("feedStatus");
+  if(!silent){ st.textContent = "Fetching feed (Direct)…"; st.className = "status"; }
+  return fetchFeedText(url).then(function(res){
+    var items = parseFeedItems(res.text, url);
+    if(!items.length) throw new Error("no readable items in that feed");
+    items.forEach(function(nd){
+      docs = docs.filter(function(d){ return d.id !== nd.id; });
+      docs.push(nd);
+    });
+    var feeds = lsGet(LS.feeds, []);
+    if(feeds.indexOf(url) < 0){ feeds.push(url); lsSet(LS.feeds, feeds); }
+    renderLibrary(); renderFeedList();
+    if(!silent){
+      st.textContent = "Path: " + res.path + " — added " + items.length + " item" + (items.length===1?"":"s") + " to the library.";
+      st.className = "status ok";
+    }
+    return items.length;
+  }).catch(function(err){
+    if(!silent){
+      st.textContent = "Could not load that feed (" + (err && err.message ? err.message : "network error") + "). If the feed blocks cross-origin requests (CORS), set your own proxy URL in Settings and try again.";
+      st.className = "status warn";
+    }
+    return 0;
+  });
+}
+el("feedAdd").addEventListener("click", function(){
+  var url = el("feedUrl").value.trim();
+  var st = el("feedStatus");
+  if(!url){ st.textContent = "Paste a feed URL first."; st.className = "status warn"; return; }
+  addFeed(url, false);
+});
+
+/* ---------------- Navigation wiring ---------------- */
+Array.prototype.forEach.call(document.querySelectorAll("[data-nav]"), function(b){
+  b.addEventListener("click", function(){ showView(b.getAttribute("data-nav")); });
+});
+Array.prototype.forEach.call(document.querySelectorAll("[data-back]"), function(b){
+  b.addEventListener("click", function(){ showView("library"); focusFirst("library"); });
+});
+
+/* ---------------- Keyboard: D-pad only ---------------- */
+document.addEventListener("keydown", function(e){
+  var tag = document.activeElement && document.activeElement.tagName;
+  var typing = tag === "INPUT" || tag === "TEXTAREA";
+  if(currentView === "reader"){
+    if(e.key === "ArrowDown"){ e.preventDefault(); if(!speech.playing) setIdx(currentIdx+1); }
+    else if(e.key === "ArrowUp"){ e.preventDefault(); if(!speech.playing) setIdx(currentIdx-1); }
+    else if(e.key === "ArrowRight"){ e.preventDefault(); if(!speech.playing) setIdx(currentIdx+5); }
+    else if(e.key === "ArrowLeft"){ e.preventDefault(); if(!speech.playing) setIdx(currentIdx-5); }
+    else if(e.key === "Enter"){
+      e.preventDefault();
+      if(document.activeElement === btnLibrary){ btnLibrary.click(); }
+      else { togglePlay(); }
+    }
+    else if(e.key === "Escape" || e.key === "Backspace"){ e.preventDefault(); showView("library"); }
+    return;
+  }
+  if(typing){
+    if(e.key === "Escape"){ document.activeElement.blur(); }
+    return;
+  }
+  if(e.key === "ArrowDown"){ e.preventDefault(); moveFocus(1); }
+  else if(e.key === "ArrowUp"){ e.preventDefault(); moveFocus(-1); }
+  else if((e.key === "Escape" || e.key === "Backspace") && currentView !== "library"){
+    e.preventDefault(); showView("library");
+  }
+});
+
+/* ---------------- Stage scaling for non-glasses screens ---------------- */
+function fitStage(){
+  var wrap = stage.parentElement;
+  var avail = wrap.clientWidth || 600;
+  var scale = Math.min(1, avail / 600);
+  stage.style.transform = "scale(" + scale + ")";
+  stage.style.left = Math.max(0, (avail - 600 * scale) / 2) + "px";
+  wrap.style.height = (600 * scale) + "px";
+}
+window.addEventListener("resize", fitStage);
+
+/* ---------------- Init ---------------- */
+var savedToken = lsGet(LS.rwToken, "");
+if(savedToken) el("rwToken").placeholder = "Token saved on this device — paste to replace";
+el("proxyUrl").value = lsGet(LS.proxyUrl, "");
+renderLibrary();
+renderSettings();
+renderFeedList();
+lsGet(LS.feeds, []).forEach(function(u){ addFeed(u, true); });
+fitStage();
+setTimeout(fitStage, 60);
+setTimeout(fitStage, 350);
+window.addEventListener("orientationchange", function(){ setTimeout(fitStage, 120); });
+})();
+</script>
+</body>
+</html>
